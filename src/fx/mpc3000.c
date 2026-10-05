@@ -29,6 +29,7 @@ typedef struct {
     float p[P_COUNT];
     dfx_smooth drive, mix, level, cutoff, warmth;
     int ctrl;
+    int fresh;
     float ratio;
     dfx_svf_coef fc;
     dfx_bq_coef shelf, top;
@@ -85,6 +86,7 @@ static void init(void *state, float sr)
     dfx_smooth_init(&s->level, dfx_db(s->p[P_LEVEL]), 20, sr);
     dfx_smooth_init(&s->cutoff, s->p[P_CUTOFF], 30, sr);
     dfx_smooth_init(&s->warmth, s->p[P_WARMTH] * 0.01f, 30, sr);
+    s->fresh = 1;
     reset(s);
 }
 
@@ -98,6 +100,16 @@ static void process(void *state, float *l, float *r, int frames)
     /* a fully open filter with no resonance is bypassed, so it adds no phase shift;
        it keeps running so turning it back on does not click */
     int filter_on = s->p[P_CUTOFF] < params[P_CUTOFF].max || s->p[P_RESO] > 0.0f;
+
+    /* the first block after init starts at the set values instead of gliding from the defaults */
+    if (s->fresh) {
+        s->cutoff.y = s->p[P_CUTOFF];
+        s->warmth.y = warmth_t;
+        s->drive.y = drive_t;
+        s->mix.y = mix_t;
+        s->level.y = level_t;
+        s->fresh = 0;
+    }
 
     for (int n = 0; n < frames; n++) {
         dfx_smooth_step(&s->cutoff, s->p[P_CUTOFF]);

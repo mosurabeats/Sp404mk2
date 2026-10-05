@@ -27,6 +27,7 @@ typedef struct {
     float p[P_COUNT];
     dfx_smooth squash, dirt, mix, level;
     int ctrl;
+    int fresh;
     float att, rel;
     float gr_db;          /* current gain reduction, dB (<= 0) */
     dfx_bq_coef sc;
@@ -81,6 +82,7 @@ static void init(void *state, float sr)
     dfx_smooth_init(&s->dirt, s->p[P_DIRT] * 0.01f, 20, sr);
     dfx_smooth_init(&s->mix, s->p[P_MIX] * 0.01f, 20, sr);
     dfx_smooth_init(&s->level, dfx_db(s->p[P_LEVEL]), 20, sr);
+    s->fresh = 1;
     reset(s);
 }
 
@@ -102,6 +104,15 @@ static void process(void *state, float *l, float *r, int frames)
     float squash_t = s->p[P_SQUASH] * 0.01f, dirt_t = s->p[P_DIRT] * 0.01f;
     float mix_t = s->p[P_MIX] * 0.01f, level_t = dfx_db(s->p[P_LEVEL]);
     float sp_ratio = 26040.0f / s->sr;
+
+    /* the first block after init starts at the set values instead of gliding from the defaults */
+    if (s->fresh) {
+        s->squash.y = squash_t;
+        s->dirt.y = dirt_t;
+        s->mix.y = mix_t;
+        s->level.y = level_t;
+        s->fresh = 0;
+    }
 
     for (int n = 0; n < frames; n++) {
         if (s->ctrl-- <= 0) {

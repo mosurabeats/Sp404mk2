@@ -9,8 +9,10 @@ hardware.
 
 ## What the library assumes
 
-* **Memory:** the host allocates `fx->state_size` bytes per instance (all
-  well under 1 KB) and calls `init` once. `process` never allocates, locks
+* **Memory:** the host allocates `fx->state_size` bytes per instance and
+  calls `init` once. The effects need under 256 bytes each, except
+  `junochorus` (about 8 KB, mostly its delay line); `juno106` needs about
+  9 KB. `process` never allocates, locks
   or does I/O, so it is safe in an audio interrupt.
 * **Audio format:** stereo, non-interleaved 32-bit float, processed in place.
   If the SP's effect chain uses fixed-point or interleaved buffers, convert
@@ -34,6 +36,24 @@ hardware.
 * DOOM OS already records effect knob moves (automation) per CTRL knob for
   Roland's effects. If its effect hosting feeds custom effects through the
   same CTRL path, automation should carry over through this mapping.
+
+## The Juno-106 synth
+
+`doomfx_synth.h` uses the same rules as the effects, plus `note_on`,
+`note_off` and `all_notes_off`. `render` overwrites its buffers instead of
+processing them in place. For sample-accurate notes, render up to the
+event's sample, send the note, then render the rest of the block.
+
+* **Pads:** in chromatic mode, pad → MIDI note, and pad velocity → `note_on`
+  velocity (only heard when Velo is above 0).
+* **DOOM OS piano roll:** each note's start and end become note on and off
+  at those ticks. Its notes are the same events the groove engine works on.
+* **Controls:** CTRL 1-3 → Cutoff, Reso, Env amount. The other 22
+  parameters need pages, ideally the DOOM OS effects editor once it exists.
+  Presets are lists of parameter changes, loaded with
+  `dfx_synth_load_preset()`.
+* **Output:** stereo, with the chorus included. It can go to a pad's bus or
+  straight into the SP's effect chain.
 
 ## Groove engine and the DOOM OS sequencer
 
@@ -61,6 +81,7 @@ build, these are the hot spots:
 | `dfx_quantize` with companding (`mpc60`) | `logf` + `expf` per sample per channel | 4096-entry lookup table for the expand step |
 | `busglue` detector | `log10f` + `powf` per sample | detect in the linear domain, or run gain every 4–16 samples |
 | `dfx_sat` everywhere | one divide | fine on ARM with an FPU |
+| `juno106` voices | per voice per sample: a ladder (one divide, four one-poles), PolyBLEP; per voice every 16 samples: `exp2f` ×2, `tanf` | the obvious first cut is fewer voices (`VOICES` in `juno106.c`); then a table for `exp2f` |
 | Coefficient updates | `tanf`/`powf` every 16 samples | already amortised; table for `tanf` if needed |
 
 If the target has no FPU, or float is too slow in the audio path, `src/dsp.h`

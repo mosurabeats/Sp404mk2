@@ -3,12 +3,12 @@ CFLAGS ?= -O2 -g
 CFLAGS += -std=c99 -Wall -Wextra -Wno-missing-field-initializers -D_DEFAULT_SOURCE -Iinclude
 LDLIBS += -lm
 
-LIB_SRC := src/doomfx.c src/groove.c $(wildcard src/fx/*.c)
+LIB_SRC := src/doomfx.c src/groove.c $(wildcard src/fx/*.c) $(wildcard src/synth/*.c)
 LIB_OBJ := $(LIB_SRC:%.c=build/%.o)
 
 all: build/doomfx build/test_doomfx
 
-build/%.o: %.c src/dsp.h include/doomfx.h include/doomfx_groove.h
+build/%.o: %.c src/dsp.h src/juno_chorus.h include/doomfx.h include/doomfx_groove.h include/doomfx_synth.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 

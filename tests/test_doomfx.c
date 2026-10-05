@@ -1,5 +1,6 @@
 #include "../include/doomfx.h"
 #include "../include/doomfx_groove.h"
+#include "../include/doomfx_synth.h"
 #include "../src/dsp.h"
 
 #include <math.h>
@@ -177,7 +178,7 @@ static void test_all_effects(void)
 {
     int count;
     const dfx_effect_def *const *fx = dfx_effects(&count);
-    CHECK(count == 5, "five effects");
+    CHECK(count == 6, "six effects");
     for (int e = 0; e < count; e++) {
         const dfx_effect_def *f = fx[e];
         CHECK(f->num_params >= 3 && f->num_params <= DFX_MAX_PARAMS, "%s: 3..8 params", f->id);
@@ -216,13 +217,22 @@ static void test_all_effects(void)
             CHECK(finite, "%s trial %d: output is finite", f->id, trial);
             CHECK(peak < 8.0f, "%s trial %d: output is bounded (peak %.2f)", f->id, trial, peak);
 
-            /* silence decays to silence */
+            /* silence decays to silence (BBD hiss is a deliberate noise floor, so it is turned off here) */
+            if (dfx_param_index(f, "hiss") >= 0) f->set_param(s, dfx_param_index(f, "hiss"), 0);
             memset(L, 0, sizeof L); memset(R, 0, sizeof R);
             f->process(s, L, R, LEN);
             float tail = 0;
             for (int i = LEN - 4800; i < LEN; i++) tail = fmaxf(tail, fmaxf(fabsf(L[i]), fabsf(R[i])));
             CHECK(tail < 1e-3f, "%s trial %d: silence in, silence out (%.5f)", f->id, trial, tail);
         }
+
+        /* parameters set right after init apply from the first sample: mix 0 is a wire */
+        f->init(s, SR);
+        f->set_param(s, dfx_param_index(f, "mix"), 0);
+        fill_test_signal(L, R, LEN, 9);
+        memcpy(L2, L, sizeof L); memcpy(R2, R, sizeof R);
+        f->process(s, L, R, LEN);
+        CHECK(!memcmp(L, L2, sizeof L) && !memcmp(R, R2, sizeof R), "%s: mix 0 right after init is a wire", f->id);
 
         /* output does not depend on block size */
         void *s2 = calloc(1, f->state_size);
@@ -244,6 +254,177 @@ static void test_all_effects(void)
     }
 }
 
+static float peak_of(const float *x, int from, int to)
+{
+    float p = 0;
+    for (int i = from; i < to; i++) p = fmaxf(p, fabsf(x[i]));
+    return p;
+}
+
+static void synth_set(const dfx_synth_def *syn, void *s, const char *id, float v)
+{
+    int i = dfx_synth_param_index(syn, id);
+    CHECK(i >= 0, "%s has param %s", syn->id, id);
+    if (i >= 0) syn->set_param(s, i, v);
+}
+
+static void test_juno_chorus(void)
+{
+    const dfx_effect_def *fx = dfx_find("junochorus");
+    void *s = new_state(fx);
+    /* a mono input becomes stereo */
+    for (int i = 0; i < LEN; i++) L[i] = R[i] = 0.4f * sinf(2 * (float)M_PI * 440 * i / SR);
+    fx->process(s, L, R, LEN);
+    float diff = 0;
+    for (int i = SR / 10; i < LEN; i++) diff = fmaxf(diff, fabsf(L[i] - R[i]));
+    CHECK(diff > 0.01f, "chorus makes stereo from mono (%.3f)", diff);
+    /* mix 0 is a wire */
+    fx->init(s, SR);
+    fx->set_param(s, dfx_param_index(fx, "mix"), 0);
+    fill_test_signal(L, R, LEN, 3);
+    memcpy(L2, L, sizeof L);
+    fx->process(s, L, R, LEN);
+    CHECK(!memcmp(L, L2, sizeof L), "chorus with mix 0 is a wire");
+    free(s);
+}
+
+static void test_juno106(void)
+{
+    int n;
+    const dfx_synth_def *const *all = dfx_synths(&n);
+    CHECK(n == 1 && dfx_synth_find("juno106") == all[0], "juno106 is registered");
+    const dfx_synth_def *syn = dfx_synth_find("juno106");
+    void *s = calloc(1, syn->state_size), *s2 = calloc(1, syn->state_size);
+
+    /* defaults, presets, knob mapping */
+    syn->init(s, SR);
+    for (int p = 0; p < syn->num_params; p++) {
+        const dfx_param *pp = &syn->params[p];
+        CHECK(syn->get_param(s, p) == pp->def, "juno.%s starts at default", pp->id);
+        CHECK(!pp->steps || pp->steps == (int)(pp->max - pp->min) + 1, "juno.%s steps match range", pp->id);
+        CHECK(strlen(pp->name) <= 8, "juno.%s name fits the screen", pp->id);
+    }
+    for (int p = 0; p < syn->num_presets; p++) {
+        const dfx_preset *pr = &syn->presets[p];
+        CHECK(dfx_synth_load_preset(syn, s, p) == 0, "preset %s loads", pr->name);
+        for (int v = 0; v < pr->count; v++) {
+            int idx = dfx_synth_param_index(syn, pr->values[v].param);
+            CHECK(idx >= 0, "preset %s: param %s exists", pr->name, pr->values[v].param);
+            if (idx >= 0) CHECK(syn->get_param(s, idx) == pr->values[v].value, "preset %s sets %s", pr->name, pr->values[v].param);
+        }
+    }
+    CHECK(dfx_synth_load_preset(syn, s, 99) == -1, "missing preset is an error");
+
+    /* silence with no notes */
+    syn->init(s, SR);
+    syn->render(s, L, R, LEN);
+    CHECK(peak_of(L, 0, LEN) == 0 && peak_of(R, 0, LEN) == 0, "no notes, no sound");
+
+    /* pitch: A3 is 220 Hz; range 16' is an octave down; the sub adds an octave below */
+    syn->init(s, SR);
+    synth_set(syn, s, "cutoff", 18000); synth_set(syn, s, "env", 0); synth_set(syn, s, "kybd", 0);
+    synth_set(syn, s, "chorus", 0); synth_set(syn, s, "sustain", 100);
+    syn->note_on(s, 57, 100);
+    syn->render(s, L, R, LEN);
+    float f220 = goertzel(L + 4800, LEN - 4800, 220, SR), f233 = goertzel(L + 4800, LEN - 4800, 233.08f, SR);
+    CHECK(f220 > 0.05f && f220 > 20 * f233, "A3 plays at 220 Hz (%.3f vs %.4f)", f220, f233);
+    CHECK(goertzel(L + 4800, LEN - 4800, 110, SR) < 0.002f, "no sub without the sub");
+    synth_set(syn, s, "sub", 100);
+    syn->render(s, L, R, LEN);
+    CHECK(goertzel(L + 4800, LEN - 4800, 110, SR) > 0.02f, "the sub plays an octave down");
+    syn->init(s, SR);
+    synth_set(syn, s, "cutoff", 18000); synth_set(syn, s, "env", 0); synth_set(syn, s, "chorus", 0);
+    synth_set(syn, s, "range", 0);
+    syn->note_on(s, 57, 100);
+    syn->render(s, L, R, LEN);
+    CHECK(goertzel(L + 4800, LEN - 4800, 110, SR) > 0.05f, "range 16' is an octave down");
+
+    /* releases end in silence: retriggered notes and stolen voices don't get stuck */
+    syn->init(s, SR);
+    synth_set(syn, s, "release", 50);
+    syn->note_on(s, 60, 100);
+    syn->note_on(s, 60, 100); /* same note twice reuses the voice */
+    for (int k = 0; k < 8; k++) syn->note_on(s, 64 + k, 100); /* more notes than voices */
+    syn->render(s, L, R, 4800);
+    syn->note_off(s, 60);
+    for (int k = 0; k < 8; k++) syn->note_off(s, 64 + k);
+    syn->render(s, L, R, LEN);
+    CHECK(peak_of(L, LEN - 4800, LEN) < 1e-4f, "all voices release to silence (%.5f)", peak_of(L, LEN - 4800, LEN));
+    syn->note_on(s, 48, 100);
+    syn->note_on(s, 55, 100);
+    syn->render(s, L, R, 4800);
+    syn->all_notes_off(s);
+    syn->render(s, L, R, LEN);
+    CHECK(peak_of(L, LEN - 4800, LEN) < 1e-4f, "all notes off releases everything");
+
+    /* gate mode: sound stops right after note off even with a long release */
+    syn->init(s, SR);
+    synth_set(syn, s, "vca", 1); synth_set(syn, s, "release", 12000); synth_set(syn, s, "chorus", 0);
+    syn->note_on(s, 60, 100);
+    syn->render(s, L, R, 4800);
+    syn->note_off(s, 60);
+    syn->render(s, L, R, 4800);
+    CHECK(peak_of(L, 2400, 4800) < 1e-3f, "gate VCA closes quickly");
+
+    /* velocity: off by default, scales level when turned up */
+    float loud[2];
+    for (int velo = 0; velo < 2; velo++) {
+        float pk[2];
+        for (int v = 0; v < 2; v++) {
+            syn->init(s, SR);
+            synth_set(syn, s, "velocity", velo ? 100 : 0); synth_set(syn, s, "chorus", 0);
+            syn->note_on(s, 60, v ? 127 : 40);
+            syn->render(s, L, R, 9600);
+            pk[v] = peak_of(L, 4800, 9600);
+        }
+        loud[velo] = pk[0] / pk[1];
+    }
+    CHECK(fabsf(loud[0] - 1) < 1e-3f, "no velocity sensitivity by default (%.3f)", loud[0]);
+    CHECK(loud[1] < 0.5f, "velocity 40 is quieter with Velo up (%.3f)", loud[1]);
+
+    /* stability with random settings and lots of notes; and block size independence */
+    uint32_t rng = 404;
+    for (int trial = 0; trial < 16; trial++) {
+        syn->init(s, SR);
+        syn->init(s2, SR);
+        for (int p = 0; p < syn->num_params; p++) {
+            const dfx_param *pp = &syn->params[p];
+            float v = trial == 0 ? pp->min : trial == 1 ? pp->max : dfx_param_from_knob(pp, 0.5f + 0.5f * dfx_randf(&rng));
+            syn->set_param(s, p, v);
+            syn->set_param(s2, p, v);
+        }
+        int pos = 0, pos2 = 0, b = 7;
+        for (int ev = 0; ev < 40; ev++) {
+            int at = (ev + 1) * (LEN / 42);
+            syn->render(s, L + pos, R + pos, at - pos);
+            pos = at;
+            while (pos2 < at) { /* odd block sizes for the second copy */
+                int m = at - pos2 < b ? at - pos2 : b;
+                syn->render(s2, L2 + pos2, R2 + pos2, m);
+                pos2 += m;
+                b = b % 61 + 5;
+            }
+            int note = 24 + (int)(dfx_rand(&rng) % 72);
+            if (ev % 3 == 2) { syn->note_off(s, note); syn->note_off(s2, note); }
+            else {
+                int vel = 1 + (int)(dfx_rand(&rng) % 127);
+                syn->note_on(s, note, vel);
+                syn->note_on(s2, note, vel);
+            }
+        }
+        syn->render(s, L + pos, R + pos, LEN - pos);
+        syn->render(s2, L2 + pos2, R2 + pos2, LEN - pos2);
+        int finite = 1;
+        for (int i = 0; i < LEN; i++) if (!isfinite(L[i]) || !isfinite(R[i])) finite = 0;
+        float pk = fmaxf(peak_of(L, 0, LEN), peak_of(R, 0, LEN));
+        CHECK(finite, "juno trial %d: finite", trial);
+        CHECK(pk < 4.0f, "juno trial %d: bounded (peak %.2f)", trial, pk);
+        CHECK(!memcmp(L, L2, sizeof L) && !memcmp(R, R2, sizeof R), "juno trial %d: independent of block size", trial);
+    }
+    free(s);
+    free(s2);
+}
+
 int main(void)
 {
     test_groove();
@@ -251,6 +432,8 @@ int main(void)
     test_sp1200_aliasing();
     test_mpc3000_transparent();
     test_all_effects();
+    test_juno_chorus();
+    test_juno106();
     printf("%d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -28,6 +28,7 @@ typedef struct {
     float p[P_COUNT];
     dfx_smooth drive, mix, level, cutoff, crush, reso;
     int ctrl;
+    int fresh;
     float env, env_att, env_rel;
     float ratio, bits, k, makeup;
     dfx_ladder_coef lc;
@@ -90,6 +91,7 @@ static void init(void *state, float sr)
     dfx_smooth_init(&s->reso, s->p[P_RESO] * 0.01f, 30, sr);
     s->env_att = 1.0f - expf(-1.0f / (0.005f * sr));
     s->env_rel = 1.0f - expf(-1.0f / (0.150f * sr));
+    s->fresh = 1;
     reset(s);
 }
 
@@ -100,6 +102,17 @@ static void process(void *state, float *l, float *r, int frames)
     float drive_t = dfx_db(s->p[P_DRIVE]), mix_t = s->p[P_MIX] * 0.01f;
     float level_t = dfx_db(s->p[P_LEVEL]);
     float crush_t = s->p[P_CRUSH] * 0.01f, reso_t = s->p[P_RESO] * 0.01f;
+
+    /* the first block after init starts at the set values instead of gliding from the defaults */
+    if (s->fresh) {
+        s->cutoff.y = s->p[P_CUTOFF];
+        s->crush.y = crush_t;
+        s->reso.y = reso_t;
+        s->drive.y = drive_t;
+        s->mix.y = mix_t;
+        s->level.y = level_t;
+        s->fresh = 0;
+    }
 
     for (int n = 0; n < frames; n++) {
         float peak = fmaxf(fabsf(l[n]), fabsf(r[n]));

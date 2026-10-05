@@ -45,7 +45,8 @@ typedef struct {
     float sr;
     float p[P_COUNT];
     dfx_smooth drive, mix, level, cutoff;
-    int ctrl;          /* samples until the next coefficient update */
+    int ctrl;
+    int fresh;          /* samples until the next coefficient update */
     float ratio, k, makeup;
     dfx_ladder_coef lc;
     dfx_sh sh[2];
@@ -105,6 +106,7 @@ static void init(void *state, float sr)
     dfx_smooth_init(&s->mix, s->p[P_MIX] * 0.01f, 20, sr);
     dfx_smooth_init(&s->level, dfx_db(s->p[P_LEVEL]), 20, sr);
     dfx_smooth_init(&s->cutoff, s->p[P_CUTOFF], 30, sr);
+    s->fresh = 1;
     reset(s);
 }
 
@@ -116,6 +118,15 @@ static void process(void *state, float *l, float *r, int frames)
     float level_t = dfx_db(s->p[P_LEVEL]);
     float bits = s->p[P_BITS];
     int out = (int)s->p[P_OUTPUT];
+
+    /* the first block after init starts at the set values instead of gliding from the defaults */
+    if (s->fresh) {
+        s->cutoff.y = s->p[P_CUTOFF];
+        s->drive.y = drive_t;
+        s->mix.y = mix_t;
+        s->level.y = level_t;
+        s->fresh = 0;
+    }
 
     for (int n = 0; n < frames; n++) {
         dfx_smooth_step(&s->cutoff, s->p[P_CUTOFF]);

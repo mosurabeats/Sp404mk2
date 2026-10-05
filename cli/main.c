@@ -5,9 +5,11 @@
  *   doomfx render <effect> <in.wav> <out.wav> [param=value ...] [--block N] [--bits 16|24]
  *   doomfx demo <out.wav> [--bpm N] [--swing P] [--machine mpc|sp1200] [--humanize T]
  *   doomfx groove [--swing P] [--machine mpc|sp1200] [--bpm N]
+ *   doomfx synth <synth> <out.wav> [--preset NAME] [--seq "C3+E3+G3:2 -:1 ..."] [--bpm N] [param=value ...]
  */
 #include "../include/doomfx.h"
 #include "../include/doomfx_groove.h"
+#include "../include/doomfx_synth.h"
 #include "wav.h"
 
 #include <math.h>
@@ -26,7 +28,10 @@ static void usage(void)
         "  doomfx list\n"
         "  doomfx render <effect> <in.wav> <out.wav> [param=value ...] [--block N] [--bits 16|24]\n"
         "  doomfx demo <out.wav> [--bpm N] [--swing P] [--machine mpc|sp1200] [--humanize TICKS]\n"
-        "  doomfx groove [--swing P] [--machine mpc|sp1200] [--bpm N]\n");
+        "  doomfx groove [--swing P] [--machine mpc|sp1200] [--bpm N]\n"
+        "  doomfx synth <synth> <out.wav> [--preset NAME] [--seq SEQ] [--bpm N] [--gate F] [param=value ...]\n"
+        "      SEQ: steps separated by spaces, NOTES:BEATS, notes joined by '+', '-' for a rest,\n"
+        "      e.g. \"D3+F3+A3+C4:4 G2+F3+B3:4 -:1\" (C4 = MIDI 60)\n");
 }
 
 static const char *opt(int argc, char **argv, const char *name, const char *def)
@@ -56,6 +61,14 @@ static int cmd_list(void)
     for (int i = 0; i < n; i++) {
         printf("%s  -  %s\n  %s\n", fx[i]->id, fx[i]->name, fx[i]->desc);
         for (int p = 0; p < fx[i]->num_params; p++) print_param(&fx[i]->params[p], p);
+        printf("\n");
+    }
+    const dfx_synth_def *const *syn = dfx_synths(&n);
+    for (int i = 0; i < n; i++) {
+        printf("%s  -  %s (synth)\n  %s\n  presets:", syn[i]->id, syn[i]->name, syn[i]->desc);
+        for (int p = 0; p < syn[i]->num_presets; p++) printf(" %s", syn[i]->presets[p].name);
+        printf("\n");
+        for (int p = 0; p < syn[i]->num_params; p++) print_param(&syn[i]->params[p], p);
         printf("\n");
     }
     return 0;
@@ -237,6 +250,143 @@ static int cmd_demo(int argc, char **argv)
     return ret;
 }
 
+/* --- synth -------------------------------------------------------------- */
+
+/* "C3", "F#2", "Bb-1" -> MIDI note (C4 = 60), or -1 */
+static int parse_note(const char *t, const char **end)
+{
+    static const int base[7] = { 9, 11, 0, 2, 4, 5, 7 }; /* A..G */
+    char c = *t;
+    if (c >= 'a' && c <= 'g') c = (char)(c - 32);
+    if (c < 'A' || c > 'G') return -1;
+    int note = base[c - 'A'];
+    t++;
+    if (*t == '#') { note++; t++; } else if (*t == 'b') { note--; t++; }
+    char *e;
+    long oct = strtol(t, &e, 10);
+    if (e == t) return -1;
+    *end = e;
+    note += (int)(oct + 1) * 12;
+    return note >= 0 && note <= 127 ? note : -1;
+}
+
+typedef struct { int frame, note, on; } synth_event;
+
+static int cmp_event(const void *a, const void *b)
+{
+    const synth_event *x = a, *y = b;
+    if (x->frame != y->frame) return x->frame < y->frame ? -1 : 1;
+    return x->on - y->on; /* offs before ons at the same frame */
+}
+
+static int cmd_synth(int argc, char **argv)
+{
+    if (argc < 4) { usage(); return 2; }
+    const dfx_synth_def *syn = dfx_synth_find(argv[2]);
+    if (!syn) { fprintf(stderr, "error: unknown synth '%s' (see: doomfx list)\n", argv[2]); return 2; }
+    const char *preset = opt(argc, argv, "--preset", NULL);
+    int is_bass = preset && strcmp(preset, "bass") == 0;
+    const char *seq = opt(argc, argv, "--seq", is_bass
+        ? "C2:0.75 C2:0.25 -:0.5 Eb2:0.5 F2:1 G2:0.5 Bb1:0.5 C2:0.75 C2:0.25 -:0.5 G1:0.5 Bb1:1 C2:1"
+        : "D3+F3+A3+C4:4 G2+F3+B3+D4:4 C3+E3+G3+B3:4 A2+E3+G3+C4:4");
+    float bpm = (float)atof(opt(argc, argv, "--bpm", "90"));
+    float gate = (float)atof(opt(argc, argv, "--gate", "0.9"));
+    if (bpm <= 0 || gate <= 0 || gate > 1) { fprintf(stderr, "error: bad --bpm or --gate\n"); return 2; }
+
+    float sr = 48000.0f;
+    void *state = calloc(1, syn->state_size);
+    synth_event *ev = NULL;
+    wav_audio a = { 0 };
+    int ret = 2;
+    if (!state) return 1;
+    syn->init(state, sr);
+    if (preset && dfx_synth_load_preset(syn, state, dfx_synth_preset_index(syn, preset))) {
+        fprintf(stderr, "error: %s has no preset '%s'\n", syn->id, preset);
+        goto done;
+    }
+    for (int i = 4; i < argc; i++) {
+        if (argv[i][0] == '-' && argv[i][1] == '-') { i++; continue; }
+        const char *eq = strchr(argv[i], '=');
+        char key[64];
+        if (!eq || eq - argv[i] >= (long)sizeof key) { fprintf(stderr, "error: expected param=value, got '%s'\n", argv[i]); goto done; }
+        memcpy(key, argv[i], (size_t)(eq - argv[i]));
+        key[eq - argv[i]] = 0;
+        int idx = dfx_synth_param_index(syn, key);
+        float v;
+        if (idx < 0) { fprintf(stderr, "error: %s has no parameter '%s'\n", syn->id, key); goto done; }
+        const dfx_param *p = &syn->params[idx];
+        if (parse_value(p, eq + 1, &v) || v < p->min || v > p->max) {
+            fprintf(stderr, "error: bad value '%s' for %s\n", eq + 1, key);
+            goto done;
+        }
+        syn->set_param(state, idx, v);
+    }
+
+    /* parse the sequence into note on / off events */
+    int cap = 64, count = 0;
+    ev = malloc(sizeof *ev * (size_t)cap);
+    double beat_frames = sr * 60.0 / bpm, pos = 0;
+    for (const char *t = seq; *t;) {
+        while (*t == ' ') t++;
+        if (!*t) break;
+        int notes[16], nn = 0;
+        if (*t == '-') {
+            t++;
+        } else {
+            for (;;) {
+                const char *e;
+                int note = parse_note(t, &e);
+                if (note < 0 || nn == 16) { fprintf(stderr, "error: bad note in --seq near '%s'\n", t); goto done; }
+                notes[nn++] = note;
+                t = e;
+                if (*t != '+') break;
+                t++;
+            }
+        }
+        double beats = 1;
+        if (*t == ':') {
+            char *e;
+            beats = strtod(t + 1, &e);
+            if (e == t + 1 || beats <= 0) { fprintf(stderr, "error: bad length in --seq near '%s'\n", t); goto done; }
+            t = e;
+        }
+        if (*t && *t != ' ') { fprintf(stderr, "error: unexpected '%c' in --seq\n", *t); goto done; }
+        for (int i = 0; i < nn; i++) {
+            if (count + 2 > cap) { cap *= 2; ev = realloc(ev, sizeof *ev * (size_t)cap); }
+            ev[count++] = (synth_event){ (int)lround(pos), notes[i], 1 };
+            ev[count++] = (synth_event){ (int)lround(pos + beats * beat_frames * gate), notes[i], 0 };
+        }
+        pos += beats * beat_frames;
+    }
+    qsort(ev, (size_t)count, sizeof *ev, cmp_event);
+
+    /* render, splitting the audio at every event; then let the release ring out */
+    float release_ms = syn->get_param(state, dfx_synth_param_index(syn, "release"));
+    int total = (int)pos + (int)(sr * (release_ms > 0 ? release_ms * 0.0012f + 0.3f : 2.0f));
+    if (wav_alloc(&a, (int)sr, total)) { ret = 1; goto done; }
+    int frame = 0;
+    for (int e = 0; e <= count; e++) {
+        int until = e < count ? ev[e].frame : total;
+        if (until > total) until = total;
+        if (until > frame) {
+            syn->render(state, a.left + frame, a.right + frame, until - frame);
+            frame = until;
+        }
+        if (e < count) {
+            if (ev[e].on) syn->note_on(state, ev[e].note, 100);
+            else syn->note_off(state, ev[e].note);
+        }
+    }
+    ret = wav_write(argv[3], &a, 24) ? 1 : 0;
+    if (!ret) printf("%s%s%s: wrote %s (%.2f s)\n", syn->name, preset ? " / " : "", preset ? preset : "",
+                     argv[3], total / sr);
+done:
+    free(ev);
+    free(state);
+    wav_free(&a);
+    return ret;
+}
+
 int main(int argc, char **argv)
 {
     if (argc < 2) { usage(); return 2; }
@@ -244,6 +394,7 @@ int main(int argc, char **argv)
     if (!strcmp(argv[1], "render")) return cmd_render(argc, argv);
     if (!strcmp(argv[1], "demo")) return cmd_demo(argc, argv);
     if (!strcmp(argv[1], "groove")) return cmd_groove(argc, argv);
+    if (!strcmp(argv[1], "synth")) return cmd_synth(argc, argv);
     usage();
     return 2;
 }

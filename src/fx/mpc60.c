@@ -32,6 +32,7 @@ typedef struct {
     float p[P_COUNT];
     dfx_smooth drive, mix, level, punch;
     int ctrl;
+    int fresh;
     float ratio, mu;
     dfx_lp4_coef aa;     /* anti-alias and reconstruction */
     dfx_bq_coef body;    /* low-mid lift for punch */
@@ -86,6 +87,7 @@ static void init(void *state, float sr)
     dfx_smooth_init(&s->mix, s->p[P_MIX] * 0.01f, 20, sr);
     dfx_smooth_init(&s->level, dfx_db(s->p[P_LEVEL]), 20, sr);
     dfx_smooth_init(&s->punch, s->p[P_PUNCH] * 0.01f, 30, sr);
+    s->fresh = 1;
     reset(s);
 }
 
@@ -96,6 +98,15 @@ static void process(void *state, float *l, float *r, int frames)
     float drive_t = dfx_db(s->p[P_DRIVE]), mix_t = s->p[P_MIX] * 0.01f;
     float level_t = dfx_db(s->p[P_LEVEL]), punch_t = s->p[P_PUNCH] * 0.01f;
     float bits = s->p[P_BITS];
+
+    /* the first block after init starts at the set values instead of gliding from the defaults */
+    if (s->fresh) {
+        s->punch.y = punch_t;
+        s->drive.y = drive_t;
+        s->mix.y = mix_t;
+        s->level.y = level_t;
+        s->fresh = 0;
+    }
 
     for (int n = 0; n < frames; n++) {
         float punch = dfx_smooth_step(&s->punch, punch_t);
