@@ -5,10 +5,12 @@
 #include <string.h>
 
 extern const dfx_effect_def dfx_sp1200, dfx_mpc60, dfx_mpc3000, dfx_bitladder, dfx_busglue, dfx_junochorus;
+extern const dfx_effect_def dfx_tapewarp, dfx_dust, dfx_stutter, dfx_dubecho;
 extern const dfx_synth_def dfx_juno106;
 
 static const dfx_effect_def *const all_effects[] = {
     &dfx_sp1200, &dfx_mpc60, &dfx_mpc3000, &dfx_bitladder, &dfx_busglue, &dfx_junochorus,
+    &dfx_tapewarp, &dfx_dust, &dfx_stutter, &dfx_dubecho,
 };
 
 static const dfx_synth_def *const all_synths[] = {

@@ -7,6 +7,44 @@
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
+/* --- tempo divisions ---------------------------------------------------- */
+
+/*
+ * Note lengths for tempo-synced effects, shortest first. Labels fit the SP
+ * screen; T is a triplet and D a dotted note. Lengths are in beats.
+ */
+#define DFX_DIV_COUNT 11
+static const char *const dfx_div_labels[DFX_DIV_COUNT] = {
+    "1/32", "1/16T", "1/16", "1/8T", "1/16D", "1/8", "1/4T", "1/8D", "1/4", "1/4D", "1/2",
+};
+static const float dfx_div_beats[DFX_DIV_COUNT] = {
+    0.125f, 1.0f / 6.0f, 0.25f, 1.0f / 3.0f, 0.375f, 0.5f, 2.0f / 3.0f, 0.75f, 1.0f, 1.5f, 2.0f,
+};
+static inline float dfx_div_to_beats(float index)
+{
+    int i = (int)(index + 0.5f);
+    return dfx_div_beats[i < 0 ? 0 : (i >= DFX_DIV_COUNT ? DFX_DIV_COUNT - 1 : i)];
+}
+
+/* --- delay line reads ----------------------------------------------------- */
+
+/*
+ * Read a power-of-two ring buffer `delay` samples behind the write index
+ * (fractional, 4-point Hermite). mask = length - 1.
+ */
+static inline float dfx_ring_read(const float *buf, unsigned mask, unsigned write, float delay)
+{
+    float fpos = (float)write - delay;
+    int ip = (int)floorf(fpos);
+    float t = fpos - (float)ip;
+    float xm1 = buf[(unsigned)(ip - 1) & mask], x0 = buf[(unsigned)ip & mask];
+    float x1 = buf[(unsigned)(ip + 1) & mask], x2 = buf[(unsigned)(ip + 2) & mask];
+    float c1 = 0.5f * (x1 - xm1);
+    float c2 = xm1 - 2.5f * x0 + 2.0f * x1 - 0.5f * x2;
+    float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
+    return ((c3 * t + c2) * t + c1) * t + x0;
+}
+
 #endif
 
 /* Expensive coefficients (tan, exp) are refreshed every this many samples. */
@@ -242,6 +280,44 @@ static inline float dfx_svf_lp(dfx_svf *s, const dfx_svf_coef *c, float x)
     s->ic1 = dfx_undenormal(2.0f * v1 - s->ic1);
     s->ic2 = dfx_undenormal(2.0f * v2 - s->ic2);
     return v2;
+}
+
+/* --- tempo divisions ---------------------------------------------------- */
+
+/*
+ * Note lengths for tempo-synced effects, shortest first. Labels fit the SP
+ * screen; T is a triplet and D a dotted note. Lengths are in beats.
+ */
+#define DFX_DIV_COUNT 11
+static const char *const dfx_div_labels[DFX_DIV_COUNT] = {
+    "1/32", "1/16T", "1/16", "1/8T", "1/16D", "1/8", "1/4T", "1/8D", "1/4", "1/4D", "1/2",
+};
+static const float dfx_div_beats[DFX_DIV_COUNT] = {
+    0.125f, 1.0f / 6.0f, 0.25f, 1.0f / 3.0f, 0.375f, 0.5f, 2.0f / 3.0f, 0.75f, 1.0f, 1.5f, 2.0f,
+};
+static inline float dfx_div_to_beats(float index)
+{
+    int i = (int)(index + 0.5f);
+    return dfx_div_beats[i < 0 ? 0 : (i >= DFX_DIV_COUNT ? DFX_DIV_COUNT - 1 : i)];
+}
+
+/* --- delay line reads ----------------------------------------------------- */
+
+/*
+ * Read a power-of-two ring buffer `delay` samples behind the write index
+ * (fractional, 4-point Hermite). mask = length - 1.
+ */
+static inline float dfx_ring_read(const float *buf, unsigned mask, unsigned write, float delay)
+{
+    float fpos = (float)write - delay;
+    int ip = (int)floorf(fpos);
+    float t = fpos - (float)ip;
+    float xm1 = buf[(unsigned)(ip - 1) & mask], x0 = buf[(unsigned)ip & mask];
+    float x1 = buf[(unsigned)(ip + 1) & mask], x2 = buf[(unsigned)(ip + 2) & mask];
+    float c1 = 0.5f * (x1 - xm1);
+    float c2 = xm1 - 2.5f * x0 + 2.0f * x1 - 0.5f * x2;
+    float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
+    return ((c3 * t + c2) * t + c1) * t + x0;
 }
 
 #endif

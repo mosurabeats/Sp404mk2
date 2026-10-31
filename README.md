@@ -1,15 +1,49 @@
-# doomfx
+# doomfx + MOSURA OS
 
-SP-1200, MPC60 and MPC3000 flavoured effects and groove tools for the
-Roland SP-404MK2, built to extend the idea behind
+SP-1200, MPC60 and MPC3000 flavoured effects, a Juno-106 synth, MPC groove
+tools and **MOSURA OS**, an MPC 2000XL / 2500 style operating system for the
+Roland SP-404MK2. Built to extend the idea behind
 [DOOM OS](https://github.com/klangfeld-labs/doom-os).
 
 DOOM OS is distributed as a binary patch for Roland's 5.52 firmware and
-doesn't have an SDK yet (it's on its "coming next" list). So this project is a
-portable C library shaped like an SP effect: three parameters on CTRL 1-3,
-more on the SHIFT pages, no memory allocation, any block size. It is ready to
-port once there is a way to load code, and you can use it now from a desktop
-command line tool that renders WAV files you can load onto the SP.
+doesn't have an SDK yet (it's on its "coming next" list). So this project is
+portable C: no memory allocation, any block size, ready to port once there
+is a way to load code. You can use it now from desktop tools: `doomfx`
+renders effects onto WAV files you can load onto the SP, and `mosura` runs
+the whole OS from scripts of button presses.
+
+## MOSURA OS
+
+![MOSURA OS](docs/screens/main-playing.png)
+
+The SP-404MK2's weak spot is menu diving and button combos, and DOOM OS adds
+features on top of that. MOSURA OS rebuilds the SP around the MPC workflow
+instead:
+
+* **One button, one screen:** MAIN, STEP, TRACK, FX, MIX and SONG. Press the
+  button again for that screen's next page. No combos for everyday work.
+* **Every screen has the same layout:** a header with the transport, fields
+  you turn to and push to edit, and a knob row that always says what
+  CTRL 1-3 do.
+* **MPC sequencing:** 32 sequences, 16 tracks, 96 PPQN, timing correct
+  with swing, REC / OVERDUB, count-in, note repeat on the swung grid,
+  erase, undo / redo, a step editor, song mode, next-sequence queueing and
+  tap tempo. Tracks are drum (sample pads, banks A-J) or synth (the
+  Juno-106, chromatic).
+* **Effects belong to tracks and buses,** MPC 2500 style: an insert per
+  track, two send buses and two master slots, all on one FX screen. Every
+  effect in this library fits any slot, including four new ones: Tape Warp,
+  Dust, Stutter and Dub Echo.
+* **Easy to restyle:** name, boot screen, track names and pad LED colours are
+  all in `src/os/theme.h`.
+
+```sh
+make
+./build/mosura run examples/first-beat.mos --out beat.wav   # a whole beat made with button presses
+```
+
+The full guide, with every screen, the effect routing and the suggested
+button mapping, is in [docs/MOSURA.md](docs/MOSURA.md).
 
 ## Effects
 
@@ -21,6 +55,14 @@ command line tool that renders WAV files you can load onto the SP.
 | `bitladder` (new) | Cutoff, Reso, Crush | Env, Drive, Mix, Level | A ladder filter clocked *inside* a crushed converter, so resonance and sweeps alias and step; an envelope follower turns it into a dirty auto-wah |
 | `busglue` (new) | Squash, Dirt, Mix | Attack, Release, SC HPF, Level | One-knob drum bus compressor with a sidechain highpass, plus a parallel 26.04 kHz / 12-bit crunch layer |
 | `junochorus` | Mode (I, II, I+II), Depth, Mix | Hiss, Level | The Juno-60 / 106 BBD chorus on its own, for anything on the SP |
+| `tapewarp` (new) | Wow, Flutter, Sat | Age, Bump, Hiss, Mix, Level | Worn tape: wow with a random drift so it never loops, flutter, saturation, 90 Hz head bump, HF loss and hiss |
+| `dust` (new) | Crackle, Wear, Noise | Rumble, Mono, Mix, Level | Worn record: crackle and rare pops, groove wear, surface noise, platter rumble, mono lows |
+| `stutter` (new) | Rate, Gate, Mode (Off, Gate, Repeat) | Swing, Decay, Fall, Mix, Level | Tempo-locked chop on an MPC-swung grid, or a repeat of one slice that falls in pitch and fades |
+| `dubecho` (new) | Time, Feedback, Mix | Tone, Drive, Wobble, Spread, Level | Tempo-synced tape echo: time changes glide (siren sweeps), feedback past 100% runs away but stays bounded |
+
+`stutter` and `dubecho` follow tempo through the optional `set_tempo` hook
+in `doomfx.h`. MOSURA OS calls it with the sequence's tempo and position.
+`doomfx render` runs them at 120 BPM.
 
 The pitch trick: sampling a record a few semitones fast and tuning it back down
 on the SP-1200 keeps the pitch but lowers the effective sample rate to
@@ -79,8 +121,8 @@ strength and window), humanise and PPQN conversion on note events.
 Needs a C99 compiler and `make`.
 
 ```sh
-make            # builds build/doomfx and build/test_doomfx
-make test       # runs the test suite
+make            # builds build/doomfx, build/mosura and the tests
+make test       # runs both test suites
 
 ./build/doomfx list                                   # effects and their parameters
 ./build/doomfx demo beat.wav --swing 62 --bpm 90      # a synthesised two-bar beat with MPC swing
@@ -109,12 +151,19 @@ a rest, and an optional `:beats` length (C4 = MIDI 60). Every note is held for
 include/doomfx.h          effect API (host-owned state, CTRL 1-3 + SHIFT params, knob mapping)
 include/doomfx_groove.h   swing / quantise / humanise
 include/doomfx_synth.h    synth API: note on / off, render, presets
+include/mos.h             MOSURA OS API: keys, pads, VALUE, CTRL knobs in; audio, screen, LEDs out
 src/dsp.h                 shared blocks: converter model, ZDF ladder, SVF, biquads, smoothers
 src/fx/*.c                the effects
 src/synth/juno106.c       the Juno-106 engine
 src/juno_chorus.h         BBD chorus shared by the synth and the junochorus effect
-cli/                      desktop tool (WAV I/O, render, synth, demo beat, swing table)
-tests/                    swing maths, converter aliasing, synth pitch and voices, stability, block-size independence
+src/os/engine.c           MOSURA OS sequencer, recording, voices, effect routing
+src/os/ui.c               MOSURA OS screens, input, pad and key LEDs
+src/os/gfx.c              3x5 font and drawing for the 128 x 64 screen
+src/os/theme.h            name, boot screen, track names, colours: restyle the OS here
+cli/                      desktop tools: doomfx (render, synth, demo, swing table), mosura (OS simulator)
+examples/                 mosura scripts
+tests/                    effects and synth (test_doomfx.c), the OS (test_mos.c)
+docs/MOSURA.md            the OS: screens, workflow, effects, button mapping
 docs/PORTING.md           how this maps onto DOOM OS / the SP-404MK2 when an SDK lands
 ```
 

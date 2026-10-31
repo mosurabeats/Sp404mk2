@@ -1,0 +1,186 @@
+# A first beat on MOSURA OS, made only with button presses, the MPC way:
+# record each part on its own track, then put effects on tracks and buses.
+#
+#   ./build/mosura run examples/first-beat.mos --out beat.wav
+#
+# Screenshots land in docs/screens/.
+
+kit                               # kick snare hat openhat clap rim tom shaker on A01-A08
+wait 1600ms                       # boot screen
+
+# --- MAIN: tempo on CTRL 1, swing on CTRL 2 -------------------------------
+knob 1 0.25                       # 90 BPM
+knob 2 0.32                       # 58% swing: applied as you record (timing correct)
+screen docs/screens/main.png
+
+# --- track 1 KICK: REC, PLAY, one bar of count-in, play it in ------------
+key REC
+key PLAY
+at 1.1.00
+pad 1 120
+at 1.2.72
+pad 1 95
+at 1.3.48
+pad 1 110
+at 2.1.00
+pad 1 120
+at 2.2.48
+pad 1 100
+at 2.3.24
+pad 1 105
+at 2.4.72
+pad 1 80
+at 2.4.90
+key PLAY                          # stop
+
+# --- track 2 SNARE: TRACK x3 puts the pads in SELECT mode ---------------
+key TRACK
+key TRACK
+key TRACK
+pad 2
+screen docs/screens/track.png
+key MAIN
+key OVERDUB
+key PLAY
+at 1.2.00
+pad 2 115
+at 1.4.00
+pad 2 115
+at 2.2.00
+pad 2 115
+at 2.4.00
+pad 2 112
+at 2.4.48
+pad 2 40                          # ghost note
+at 2.4.90
+key PLAY
+
+# --- track 3 HATS: hold NOTE REPEAT and a pad, it plays swung 16ths -------
+key TRACK
+pad 3
+key MAIN
+key OVERDUB
+key PLAY
+at 1.1.00
+down REPEAT
+padon 3 85
+at 2.4.80
+padoff 3
+up REPEAT
+at 2.4.90
+key PLAY
+
+# --- STEP edit: open hats at 1.4.48 and 2.4.48 ---------------------------
+key STEP
+turn 14                           # VALUE walks the 1/16 grid
+pad 4 90
+down SHIFT
+turn 1                            # SHIFT + VALUE: a bar
+up SHIFT
+pad 4 80
+screen docs/screens/step.png
+
+# --- track 5 BASS: make it a synth track, pick the bass patch -----------
+key TRACK
+pad 5
+turn 2                            # cursor to TYPE
+push
+turn 1                            # DRUM -> SYNTH
+push
+turn 2                            # cursor to PATCH
+push
+turn 1                            # pad -> bass
+push
+knob 3 0.25                       # octave 2
+screen docs/screens/track-synth.png
+key MAIN
+key OVERDUB
+key PLAY
+at 1.1.00
+padon 1 110
+at 1.2.24
+padoff 1
+at 1.2.48
+padon 1 100
+at 1.3.00
+padoff 1
+at 1.3.24
+padon 4 105
+at 1.4.48
+padoff 4
+at 2.1.00
+padon 6 110
+at 2.2.00
+padoff 6
+at 2.2.48
+padon 4 100
+at 2.3.24
+padoff 4
+at 2.3.48
+padon 8 100
+at 2.4.72
+padoff 8
+at 2.4.90
+key PLAY
+
+# --- FX: effects live on tracks and buses, one screen, no combos ---------
+key MIX
+turn -4                           # track 1 KICK
+knob 1 0.72                       # level
+key FX                            # INSERT page of the active track
+push
+turn 1                            # SP-1200
+push
+knob 3 0.35                       # drive
+screen docs/screens/fx-insert.png
+
+key MIX
+turn 1                            # track 2 SNARE
+knob 3 0.35                       # send A 35%
+key FX                            # back on the FX screen ...
+key FX                            # ... FX again: SEND A page
+push
+turn 10                           # Dub Echo, 100% wet on a send
+push
+screen docs/screens/fx-send.png
+
+key FX
+key FX                            # MASTER 1
+push
+turn 5                            # Bus Glue
+push
+key FX                            # MASTER 2
+push
+turn 7                            # Tape Warp
+push
+knob 1 0.15                       # a little wow
+screen docs/screens/fx-master.png
+
+key MIX
+turn 1                            # track 3 HATS
+key FX                            # INSERT page for HATS
+push
+turn 9                            # Stutter
+push
+knob 3 0                          # Mode: Off until we throw it
+knob 1 0.2                        # Rate 1/16
+
+# --- play it back: a stutter throw on the hats in bar 2 -----------------
+key MAIN
+key PLAY
+wait 2bars
+screen docs/screens/main-playing.png
+at 2.1.00
+knob 3 1                          # Repeat
+at 2.3.00
+knob 3 0                          # and back
+at 1.1.00
+key MIX
+wait 1bar
+screen docs/screens/mix.png
+wait 1bar
+at 1.1.00
+key PLAY
+wait 1s
+key MAIN
+events

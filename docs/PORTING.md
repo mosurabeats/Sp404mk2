@@ -96,3 +96,39 @@ plus the per-effect `process` loops, is the path.
 2. Then `sp1200 output=7-8 pitch=12` with a 10 kHz sine. You should hear a
    strong 3.02 kHz alias. That checks the converter clock.
 3. Compare against renders from `build/doomfx render` of the same input.
+
+## MOSURA OS
+
+MOSURA OS (`include/mos.h`, see [MOSURA.md](MOSURA.md)) replaces the SP's
+user interface, so it needs more from a port than an effect does: it takes
+over the panel, the screen and the pads.
+
+* **Audio:** call `mos_process()` from the audio callback. It renders the
+  whole mix (samples, synth tracks, all effects) into stereo float. Any
+  block size gives the same output (tested).
+* **Panel:** scan the buttons, pads and knobs and call `mos_key()`,
+  `mos_pad()`, `mos_turn()` and `mos_knob()`. All `mos_*` calls must come
+  from one thread. If the panel is read on another thread than audio, queue
+  the events and replay them at the start of each audio block.
+* **Screen:** `mos_screen()` returns the 128 × 64 frame, one byte per pixel.
+  Convert it to the OLED's page format and send it at 20-30 fps. The screen
+  size is an assumption to check against the hardware; layouts use
+  `MOS_LCD_W` and `MOS_LCD_H`.
+* **LEDs:** `mos_pad_color()` for the RGB pads and `mos_key_led()` for the
+  buttons (on, off or blinking).
+* **Samples:** `mos_set_sample()` points a pad at host-owned audio. The OS
+  never copies or frees it.
+* **Button mapping:** the table in MOSURA.md. It's a proposal until it can
+  be tried on a unit.
+
+### Memory
+
+`mos_size()` is about 7.5 MB. Nearly all of it (6.5 MB) is the 12 effect
+units, because each one reserves room for the largest effect: Stutter and
+Dub Echo keep 1.36 s of stereo audio each. If that is too much:
+
+* lower `MOS_INSERTS` (8 inserts shared by 16 tracks), or
+* give each unit only what its effect needs from a pool, or
+* store the two long delay lines as 16-bit.
+
+The 32 sequences of 2048 events are 0.8 MB, and the 16 synth tracks 0.2 MB.

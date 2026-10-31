@@ -47,6 +47,14 @@ typedef struct dfx_effect_def {
     void (*set_param)(void *state, int index, float value);
     float (*get_param)(const void *state, int index);
     void (*process)(void *state, float *left, float *right, int frames);
+    /*
+     * Optional (NULL for effects that don't follow tempo). The host calls it
+     * before process() with the tempo and the transport position, in beats,
+     * of the first frame of the next block; beat < 0 means the transport is
+     * stopped and the effect free-runs at `bpm`. Tempo-synced effects
+     * (stutter, dubecho) lock their rhythm to the beat with it.
+     */
+    void (*set_tempo)(void *state, float bpm, double beat);
 } dfx_effect_def;
 
 /* All effects in this library, in display order. */

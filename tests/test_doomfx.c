@@ -178,7 +178,7 @@ static void test_all_effects(void)
 {
     int count;
     const dfx_effect_def *const *fx = dfx_effects(&count);
-    CHECK(count == 6, "six effects");
+    CHECK(count == 10, "ten effects");
     for (int e = 0; e < count; e++) {
         const dfx_effect_def *f = fx[e];
         CHECK(f->num_params >= 3 && f->num_params <= DFX_MAX_PARAMS, "%s: 3..8 params", f->id);
@@ -217,10 +217,19 @@ static void test_all_effects(void)
             CHECK(finite, "%s trial %d: output is finite", f->id, trial);
             CHECK(peak < 8.0f, "%s trial %d: output is bounded (peak %.2f)", f->id, trial, peak);
 
-            /* silence decays to silence (BBD hiss is a deliberate noise floor, so it is turned off here) */
-            if (dfx_param_index(f, "hiss") >= 0) f->set_param(s, dfx_param_index(f, "hiss"), 0);
-            memset(L, 0, sizeof L); memset(R, 0, sizeof R);
-            f->process(s, L, R, LEN);
+            /*
+             * silence decays to silence. Some controls make sound on purpose
+             * (hiss, crackle, runaway echo, a held repeat), so they are
+             * turned off for this check.
+             */
+            static const char *const generators[] = { "hiss", "crackle", "noise", "rumble", "feedback", "mode" };
+            for (int g = 0; g < 6; g++)
+                if (dfx_param_index(f, generators[g]) >= 0) f->set_param(s, dfx_param_index(f, generators[g]), 0);
+            /* 1.5 s of silence: the longest echo (a half note at 120 BPM) is 1 s */
+            for (int k = 0; k < 3; k++) {
+                memset(L, 0, sizeof L); memset(R, 0, sizeof R);
+                f->process(s, L, R, LEN);
+            }
             float tail = 0;
             for (int i = LEN - 4800; i < LEN; i++) tail = fmaxf(tail, fmaxf(fabsf(L[i]), fabsf(R[i])));
             CHECK(tail < 1e-3f, "%s trial %d: silence in, silence out (%.5f)", f->id, trial, tail);
